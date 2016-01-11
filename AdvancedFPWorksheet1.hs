@@ -59,8 +59,8 @@ stringToInt (x : xs) = (ord x) + (1000 * (stringToInt xs))
 
 intToString :: Int -> String
 intToString 0 = []
-intToString i = let divved = i `div` 1000
-                    remmed = i `rem` 1000
+intToString i = let divved = i `rem` 1000
+                    remmed = i `div` 1000
                 in chr divved : (intToString remmed)
 
 flattenTag :: TagExp -> [Int]
@@ -110,6 +110,13 @@ instance Convertible Char TagExp where
     outof (C c) = c
     outof _ = error "Not a Char"
 
+instance Convertible Bool TagExp where
+    into True = D "True" []
+    into False = D "False" []
+    outof (D "True" []) = True
+    outof (D "False" []) = False
+    outof _ = error "Not a Bool"
+
 instance Convertible a TagExp => Convertible [a] TagExp where
     into [] = D "[]" []
     into (a : as) = D "::" [into a, into as]
@@ -145,10 +152,17 @@ class Convertible a TagExp => Generic a where
   unflatten xs = let (t, xs') = unflattenTag xs
                  in (outof t, xs')
 
+instance Generic Int where
+instance Generic Char where
+instance Generic Bool where
+instance Generic a => Generic [a] where
+instance Generic a => Generic (Tree a) where
+instance (Generic a, Generic b) => Generic (a,b) where
+{-
 instance (Generic a,Generic b) => Generic (a,b) where
   flatten (a,b) = flatten a ++ flatten b
   unflatten xs = ((x,y), zs)
     where (x,ys) = unflatten xs
           (y,zs) = unflatten ys
+-}
 
-    
