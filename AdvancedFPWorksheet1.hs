@@ -3,6 +3,9 @@
     FlexibleInstances,
     FlexibleContexts  #-}
 
+-- Clarissa Littler
+-- clarissa.littler@gmail.com
+
 module HW1 where
 import Data.Char (chr,ord)
 
@@ -21,7 +24,7 @@ instance Eq a => Eq (Tree a) where
 
 instance Ord a => Ord (Tree a) where
     (Tip a) <= (Tip a') = a <= a'
-    (Fork l r) <= (Fork l' r') = (l <= l') && (r <= r')
+    (Fork l r) <= (Fork l' r') = (l < l') || ((l == l') && (r <= r'))
     (Fork _ _) <= (Tip _) = False
     (Tip _) <= (Fork _ _) = True
 
