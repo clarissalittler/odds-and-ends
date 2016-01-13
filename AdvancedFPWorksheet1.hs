@@ -154,6 +154,8 @@ class Convertible a TagExp => Generic a where
   unflatten:: [Int] -> (a,[Int])
   unflatten xs = let (t, xs') = unflattenTag xs
                  in (outof t, xs')
+  inject :: (TagExp -> TagExp) -> a -> a
+  inject f = outof . f . into
 
 instance Generic Int where
 instance Generic Char where
@@ -161,11 +163,12 @@ instance Generic Bool where
 instance Generic a => Generic [a] where
 instance Generic a => Generic (Tree a) where
 instance (Generic a, Generic b) => Generic (a,b) where
-{-
-instance (Generic a,Generic b) => Generic (a,b) where
-  flatten (a,b) = flatten a ++ flatten b
-  unflatten xs = ((x,y), zs)
-    where (x,ys) = unflatten xs
-          (y,zs) = unflatten ys
--}
 
+incrementTag :: TagExp -> TagExp
+incrementTag (I i) = I (i+1)
+incrementTag (C c) = C c
+incrementTag (F f) = F f
+incrementTag (D c ds) = D c (map incrementTag ds)
+
+increment :: Generic a => a -> a
+increment = inject incrementTag
