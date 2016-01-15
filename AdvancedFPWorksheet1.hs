@@ -172,3 +172,13 @@ incrementTag (D c ds) = D c (map incrementTag ds)
 
 increment :: Generic a => a -> a
 increment = inject incrementTag
+
+doubleFunTag :: TagExp -> TagExp
+doubleFunTag (I i) = I i
+doubleFunTag (C c) = C c
+doubleFunTag (F f) = F (f . f)
+doubleFunTag (D c ds) = D c (map doubleFunTag ds)
+
+doubleFun :: Generic a => a -> a
+doubleFun = inject doubleFunTag
+
