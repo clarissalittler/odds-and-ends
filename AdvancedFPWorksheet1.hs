@@ -182,3 +182,11 @@ doubleFunTag (D c ds) = D c (map doubleFunTag ds)
 doubleFun :: Generic a => a -> a
 doubleFun = inject doubleFunTag
 
+data Forest a = Node a [Forest a]
+
+instance Convertible a TagExp => Convertible (Forest a) TagExp where
+    into (Node x fs) = D "FNode" $ into x : (map into fs)
+    outof (D "FNode" (x : fs)) = Node (outof x) (map outof fs)
+    outof _ = error "Not a forest"
+
+instance Generic a => Generic (Forest a) where
