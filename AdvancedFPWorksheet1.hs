@@ -190,3 +190,13 @@ instance Convertible a TagExp => Convertible (Forest a) TagExp where
     outof _ = error "Not a forest"
 
 instance Generic a => Generic (Forest a) where
+
+weirdDoubleTag (I i) = I i
+weirdDoubleTag (C c) = C c
+weirdDoubleTag (F f) = F f
+weirdDoubleTag (D c ds) = D c (ds ++ ds)
+
+-- I was holding out for quadruple tree
+doubleTree = inject weirdDoubleTag
+-- this is just silly and you'd never want to do this, although it does mean that if you have a variable
+-- set of arguments to a constructor they'll get doubled orrr they might lead to an error
