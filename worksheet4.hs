@@ -26,7 +26,7 @@ import Debug.Trace
 import qualified Text.PrettyPrint.HughesPJ as PP
 -- import a few widely used operations without qualification
 import Text.PrettyPrint.HughesPJ(Doc,text,int,float,hang,sep,vcat,comma,(<>),(<+>),($$),($+$),render,
-                                parens,punctuate)
+                                parens,punctuate,empty)
 
 
 -----------------------------------------------
@@ -99,7 +99,7 @@ lbStyle = Token.LanguageDef
                 , Token.commentEnd     = "-}"
                 , Token.commentLine    = "--"
                 , Token.nestedComments = True
-                , Token.identStart     = lower
+                , Token.identStart     = lower <|> upper
                 , Token.identLetter    = alphaNum <|> oneOf "_'"
                 , Token.opStart        = oneOf ":!#$%&*+./<=>?@\\^|-~"
                 , Token.opLetter       = oneOf ":!#$%&*+./<=>?@\\^|-~"
@@ -107,7 +107,7 @@ lbStyle = Token.LanguageDef
                 , Token.reservedOpNames =
                     ["!","?","\\",":",".", "<", "=", "+", "-", "^", "()", "_", "@"]
                 , Token.reservedNames  =
-                  ["if","then","else","case","of","let","in"]
+                  ["if","then","else","case","of","let","in", "do"]
                 }
 
 
@@ -170,6 +170,7 @@ data Lit
   | Char Char
   | Unit
   | Float Float
+    deriving Show
 
 data Pat
   = Plit Lit                  -- { 5 or 'c' }
@@ -178,7 +179,7 @@ data Pat
   | Paspat Var Pat            -- { x @ p }
   | Pwild                     -- { _ }
   | Pcon Con [Pat]            -- C x y (z,a)
-
+    deriving Show
 
 data Exp
   = Var Name                   -- { x  or  Nil }
@@ -189,6 +190,7 @@ data Exp
   | Let [Dec] Exp             -- { let { x=e1;   y=e2 } in e3 }
   | Case Exp [Match Pat Exp Dec]    -- { case e of { m1; m2 }}
   | Do [Stmt Pat Exp Dec]           -- { do { p <- e1; e2 } }
+       deriving (Show)
 
 -- Let, Case, Do, all use layout
 
@@ -197,17 +199,18 @@ type Match p e d = (SourcePos,p,Body e,[d]) -- case e of { p -> b where decs }
 data Body e
   = Guarded [(e,e)]           -- f p { | e1 = e2 | e3 = e4 } where ds
   | Normal e                  -- f p = { e } where ds
-                              -- Where uses layout
+    deriving Show -- Where uses layout
 
 data Stmt p e d
   = BindSt SourcePos p e
   | LetSt SourcePos [d]
   | NoBindSt SourcePos e
+    deriving Show
 
 data Dec
   = Fun SourcePos Var [Match [Pat] Exp Dec]   -- { f p1 p2 = b where decs }
   | Val SourcePos Pat (Body Exp) [Dec]        -- { p = b where decs }
-
+    deriving Show
 
 ------------------------------
 -- Parsing code here
@@ -220,7 +223,7 @@ parseIden pred = do
   then do
     p <- getPosition
     return $ (p,x)
-  else fail "wrong type of identifier"
+  else mzero
 
 parseVar = parseIden isLower
 parseCon = parseIden isUpper
@@ -242,7 +245,7 @@ parseUnit = do
 
 
 -- PATTERNS
-parsePat = pLit <|> pVar <|> pProd <|> pAs <|> pWild <|> pCon
+parsePat = tryChoice [pAs, pLit, pVar, pProd, pWild, pCon]
 
 pLit = fmap Plit parseLit
 pVar = fmap Pvar parseVar 
@@ -251,7 +254,7 @@ pProd = fmap Pprod $ parenS (sepBy1 parsePat commA)
 pAs = do
   v <- parseVar
   symboL "@"
-  p <- parenS parsePat
+  p <- parsePat
   return $ Paspat v p
 pWild = symboL "_" >> return Pwild
 pCon = parenS $ do
@@ -292,7 +295,7 @@ parseMatch ppat pexp pdecl sep = do
   p <- ppat
   sep
   b <- parseBody pexp
-  ds <- parseWhere pdecl
+  ds <- option [] (parseWhere pdecl)
   return $ (pos,p,b,ds)
 
 -- BODY
@@ -309,13 +312,15 @@ pGuarded pexp = fmap Guarded $ layout (guardedAux pexp) (return ())
  
 -- EXPRESSIONS
 
-parseExp = pEName <|> pELit <|> pEProd <|> pEApp <|> pELam <|> pELet <|> pECase <|> pEDo
+parseExp = try (pEApp) <|> parseExp'
+  
+parseExp' = pEName <|> pELit <|> pEProd <|> pELam <|> pELet <|> pECase <|> pEDo
 
 pEName = fmap Var parseName
 pELit = fmap Lit parseLit
 pEProd = fmap Prod $ parenS (sepBy1 parseExp commA)
-pEApp = do -- this probably won't work because of left descent, but we'll leave it at the moment
-  f <- parseExp
+pEApp = do 
+  f <- parseExp'
   a <- parseExp
   return $ App f a
 pELam = do
@@ -339,20 +344,20 @@ pEDo = do
   return $ Do sts
 
 -- DECLARATIONS
-parseDecl = funDecl <|> valDecl
+parseDecl = try (funDecl) <|> valDecl
 
 funEq f = do
   f' <- parseVar
   if f == f'
   then do
     many1 parsePat
-  else fail "not matching function definitions"
+  else mzero
 
 funDecl = do
   pos <- getPosition
   f <- parseVar
   m <- parseMatch (many1 parsePat) parseExp parseDecl (symboL "=")
-  ms <- many $ parseMatch (funEq f) parseExp parseDecl (symboL "=")
+  ms <- option [] $ many $ parseMatch (funEq f) parseExp parseDecl (symboL "=")
   return $ Fun pos f (m : ms)
 
 valDecl = do
@@ -360,15 +365,19 @@ valDecl = do
   p <- parsePat
   symboL "="
   b <- parseBody parseExp
-  ds <- parseWhere parseDecl
+  ds <- option [] $ parseWhere parseDecl
   return $ Val pos p b ds
 
 ---------------------------------
 -- Pretty printing code here
 
+ppWhere pd [] = empty
+ppWhere pd ds = hang (text "where") 4 (vcat $ map ppDec ds)
 
 ppDec:: Dec -> Doc
-ppDec = undefined
+ppDec (Fun _ v ms) = vcat $ map (ppMatch aux ppExp ppDec "=") ms
+    where aux ps = text "v" <+> sep (map ppPat ps)
+ppDec (Val _ p b ds) = ppPat p <+> ppBody ppExp b <+> ppWhere ppDec ds
 
 ppLit:: Lit -> Doc
 ppLit (Int i) = int i
@@ -383,12 +392,12 @@ ppExp (Prod es) = parens $ ppCommaSep $ map ppExp es
 ppExp (App f a) = ppExp f <+> ppExp a
 ppExp (Lam ps e) = (text "\\ ") <> sep (map ppPat ps) <+> text "->" <+> ppExp e
 ppExp (Let ds e) = hang (text "let") 4 (vcat $ map ppDec ds) $$ text "in" <+> ppExp e
-ppExp (Case e ms) = hang (text "case" <+> ppExp e <+> text "of") 4 (vcat (map (ppMatch "->") ms))
+ppExp (Case e ms) = hang (text "case" <+> ppExp e <+> text "of") 4 (vcat (map (ppMatch ppPat ppExp ppDec "->") ms))
 ppExp (Do stms) = hang (text "do") 4 (vcat $ map (ppStmt ppPat ppExp ppDec) stms)
 
 ppCommaSep = sep . (punctuate comma)
 
-ppMatch = undefined
+ppMatch pp pe pd sp (_,p,b,ds) = pp p <+> text sp <+> ppBody pe b <+> ppWhere pd ds
 
 ppPat:: Pat -> Doc
 ppPat (Plit l) = ppLit l
@@ -399,15 +408,16 @@ ppPat Pwild = text "_"
 ppPat (Pcon c ps) = text (snd c) <+> sep (map ppPat ps)
 
 ppBody:: (e -> Doc) -> Body e -> Doc
-ppBody = undefined
-
+ppBody pe (Guarded es) = vcat $ map (\(e1, e2) -> pe e1 <+> text "=" <+> pe e2) es
+ppBody pe (Normal e) = text "=" <+> pe e
 
 ppStmt :: (p -> Doc) -> (e -> Doc) -> (d -> Doc) -> Stmt p e d -> Doc
-ppStmt = undefined
-
+ppStmt pp pe pd (BindSt _ p e) = pp p <+> text "<-" <+> pe e
+ppStmt pp pe pd (LetSt _ ds) = hang (text "let") 4 (vcat $ map pd ds)
+ppStmt pp pe pd (NoBindSt _ e) = pe e
 
 ppProg :: [Dec] -> Doc
-ppProg = undefined
+ppProg = vcat . map ppDec
 
 
 
