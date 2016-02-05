@@ -26,7 +26,7 @@ import Debug.Trace
 import qualified Text.PrettyPrint.HughesPJ as PP
 -- import a few widely used operations without qualification
 import Text.PrettyPrint.HughesPJ(Doc,text,int,float,hang,sep,vcat,comma,(<>),(<+>),($$),($+$),render,
-                                parens,punctuate,empty)
+                                parens,punctuate,empty,nest)
 
 
 -----------------------------------------------
@@ -107,7 +107,7 @@ lbStyle = Token.LanguageDef
                 , Token.reservedOpNames =
                     ["!","?","\\",":",".", "<", "=", "+", "-", "^", "()", "_", "@"]
                 , Token.reservedNames  =
-                  ["if","then","else","case","of","let","in", "do"]
+                  ["if","then","else","case","of","let","in", "do", "where"]
                 }
 
 
@@ -215,6 +215,8 @@ data Dec
 ------------------------------
 -- Parsing code here
 
+parseProg = sepBy1 parseDecl newline
+
 tryChoice = choice . map try
 
 parseIden pred = do
@@ -223,7 +225,7 @@ parseIden pred = do
   then do
     p <- getPosition
     return $ (p,x)
-  else mzero
+  else fail "couldn't parse identifier"
 
 parseVar = parseIden isLower
 parseCon = parseIden isUpper
@@ -233,19 +235,18 @@ parseLit = tryChoice [parseFloat, parseInt, parseChar, parseUnit]
 
 parseInt = fmap Int int32
 parseFloat = fmap Float float32
-parseChar = do
-  char '\''
-  c <- anyChar
-  char '\''
-  return $ Char c
+parseChar = lexemE $ do 
+              char '\''
+              c <- anyChar
+              char '\''
+              return $ Char c
 parseUnit = do
-  char '('
-  char ')'
+  symboL "()"
   return Unit
 
 
 -- PATTERNS
-parsePat = tryChoice [pAs, pLit, pVar, pProd, pWild, pCon]
+parsePat = tryChoice [pAs, pLit, pVar, pProd, pWild, pCon] <?> "couldn't parse pattern"
 
 pLit = fmap Plit parseLit
 pVar = fmap Pvar parseVar 
@@ -263,11 +264,12 @@ pCon = parenS $ do
          return $ Pcon c ps
 
 -- STATEMENTS
-parseStmt ppat pexp pdecl = bindSt ppat pexp <|> letSt pdecl <|> noBind pexp
+parseStmt ppat pexp pdecl = tryChoice [bindSt ppat pexp, letSt pdecl, noBind pexp] <?> "couldn't parse statement"
 
 bindSt ppat pexp = do
   pos <- getPosition
   p <- ppat
+  symboL "<-"
   e <- pexp
   return $ BindSt pos p e
 
@@ -284,37 +286,36 @@ noBind pexp = do
 
 -- WHERE
 
-parseWhere pdecl = do
+parseWhere pdecl = (do
   keyworD "where"
-  layout pdecl (return ())
+  layout pdecl (return ())) <?> "couldn't parse where clause"
 
 -- MATCH
 
-parseMatch ppat pexp pdecl sep = do
+parseMatch ppat pexp pdecl sep = (do
   pos <- getPosition
   p <- ppat
-  sep
-  b <- parseBody pexp
+  b <- parseBody pexp sep
   ds <- option [] (parseWhere pdecl)
-  return $ (pos,p,b,ds)
+  return $ (pos,p,b,ds)) <?> "couldn't parse match"
 
 -- BODY
-parseBody pexp = pGuarded pexp <|> (fmap Normal pexp)
+parseBody pexp sep = try (sep >> fmap Normal pexp) <|> pGuarded pexp sep <?> "couldn't parse body of definition"
 
-guardedAux pexp = do
+guardedAux pexp sep = do
   symboL "|"
   e1 <- pexp
-  symboL "="
+  sep
   e2 <- pexp
   return $ (e1,e2)
 
-pGuarded pexp = fmap Guarded $ layout (guardedAux pexp) (return ())
+pGuarded pexp sep = fmap Guarded $ layout (guardedAux pexp sep) (return ())
  
 -- EXPRESSIONS
 
 parseExp = try (pEApp) <|> parseExp'
   
-parseExp' = pEName <|> pELit <|> pEProd <|> pELam <|> pELet <|> pECase <|> pEDo
+parseExp' = pEName <|> pELit <|> pEProd <|> pELam <|> pELet <|> pECase <|> pEDo <?> "couldn't parse expression"
 
 pEName = fmap Var parseName
 pELit = fmap Lit parseLit
@@ -344,27 +345,23 @@ pEDo = do
   return $ Do sts
 
 -- DECLARATIONS
-parseDecl = try (funDecl) <|> valDecl
+parseDecl = try (funDecl) <|> valDecl <?> "couldn't parse definition"
 
 funEq f = do
-  f' <- parseVar
-  if f == f'
-  then do
-    many1 parsePat
-  else mzero
+  symboL f
+  many1 parsePat
 
 funDecl = do
   pos <- getPosition
-  f <- parseVar
+  f@(vpos,fname) <- parseVar
   m <- parseMatch (many1 parsePat) parseExp parseDecl (symboL "=")
-  ms <- option [] $ many $ parseMatch (funEq f) parseExp parseDecl (symboL "=")
+  ms <- option [] $ many $ parseMatch (funEq fname) parseExp parseDecl (symboL "=")
   return $ Fun pos f (m : ms)
 
 valDecl = do
   pos <- getPosition
   p <- parsePat
-  symboL "="
-  b <- parseBody parseExp
+  b <- parseBody parseExp (symboL "=")
   ds <- option [] $ parseWhere parseDecl
   return $ Val pos p b ds
 
@@ -376,12 +373,12 @@ ppWhere pd ds = hang (text "where") 4 (vcat $ map ppDec ds)
 
 ppDec:: Dec -> Doc
 ppDec (Fun _ v ms) = vcat $ map (ppMatch aux ppExp ppDec "=") ms
-    where aux ps = text "v" <+> sep (map ppPat ps)
-ppDec (Val _ p b ds) = ppPat p <+> ppBody ppExp b <+> ppWhere ppDec ds
+    where aux ps = text (snd v) <+> sep (map ppPat ps)
+ppDec (Val _ p b ds) = ppPat p <+> ppBody ppExp b "=" $+$ nest 4 (ppWhere ppDec ds)
 
 ppLit:: Lit -> Doc
 ppLit (Int i) = int i
-ppLit (Char c) = text $ "'c'"
+ppLit (Char c) = text $ ['\'',c,'\'']
 ppLit Unit = text "()"
 ppLit (Float f) = float f
 
@@ -391,13 +388,13 @@ ppExp (Lit l) = ppLit l
 ppExp (Prod es) = parens $ ppCommaSep $ map ppExp es
 ppExp (App f a) = ppExp f <+> ppExp a
 ppExp (Lam ps e) = (text "\\ ") <> sep (map ppPat ps) <+> text "->" <+> ppExp e
-ppExp (Let ds e) = hang (text "let") 4 (vcat $ map ppDec ds) $$ text "in" <+> ppExp e
+ppExp (Let ds e) = hang (text "let") 4 (vcat $ map ppDec ds) $+$ text "in" <+> ppExp e
 ppExp (Case e ms) = hang (text "case" <+> ppExp e <+> text "of") 4 (vcat (map (ppMatch ppPat ppExp ppDec "->") ms))
 ppExp (Do stms) = hang (text "do") 4 (vcat $ map (ppStmt ppPat ppExp ppDec) stms)
 
 ppCommaSep = sep . (punctuate comma)
 
-ppMatch pp pe pd sp (_,p,b,ds) = pp p <+> text sp <+> ppBody pe b <+> ppWhere pd ds
+ppMatch pp pe pd sp (_,p,b,ds) = pp p <+> ppBody pe b sp $+$ nest 4 (ppWhere pd ds)
 
 ppPat:: Pat -> Doc
 ppPat (Plit l) = ppLit l
@@ -407,9 +404,9 @@ ppPat (Paspat v p) = text (snd v) <> text "@" <> parens (ppPat p)
 ppPat Pwild = text "_"
 ppPat (Pcon c ps) = text (snd c) <+> sep (map ppPat ps)
 
-ppBody:: (e -> Doc) -> Body e -> Doc
-ppBody pe (Guarded es) = vcat $ map (\(e1, e2) -> pe e1 <+> text "=" <+> pe e2) es
-ppBody pe (Normal e) = text "=" <+> pe e
+ppBody:: (e -> Doc) -> Body e -> String -> Doc
+ppBody pe (Guarded es) _ = vcat $ map (\(e1, e2) -> text "|" <+> pe e1 <+> text "=" <+> pe e2) es
+ppBody pe (Normal e) sp = text sp <+> pe e
 
 ppStmt :: (p -> Doc) -> (e -> Doc) -> (d -> Doc) -> Stmt p e d -> Doc
 ppStmt pp pe pd (BindSt _ p e) = pp p <+> text "<-" <+> pe e
@@ -426,8 +423,21 @@ ppProg = vcat . map ppDec
 
 
 main :: IO()
-main = undefined
-
+main = do
+  e <- parseFile parseProg "test.hs"
+  putStrLn $ render $ ppProg e
+  writeFile "test2.hs" (render $ ppProg e)
+  e' <- parseFile parseProg "test2.hs"
+  putStrLn $ render $ ppProg e'
 
 test:: IO()
-test = undefined
+test = do
+  putStrLn "Enter an expression! (or type :q)"
+  e <- getLine
+  if e == ":q" 
+   then return ()
+   else case parse1 "repl" parseExp e of
+    Right e' -> (putStrLn $ render $ ppExp e') >> test
+    Left f -> (putStrLn $ show f) >> test
+  
+  
