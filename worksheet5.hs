@@ -155,7 +155,7 @@ covalid (CoHom (CoAlgebra f) (CoAlgebra g) h) x =  fmap h (f x) == g(h x)
 
 -- Question #4
 
-data TreeF x = TipF Int | ForkF x Int x   
+data TreeF x = TipF | ForkF x Int x   
              deriving Functor
 data LangF x = Add5F x x | Sub5F x x | Mult5F x x | Int5F Int | Var5F String | Assign5F String x
              deriving Functor
@@ -164,18 +164,42 @@ data LangF x = Add5F x x | Sub5F x x | Mult5F x x | Int5F Int | Var5F String | A
 -- Question #5
 
 -- 4
+
+intToNatF :: Int -> Initial NatF
+intToNatF 0 = Init Z
+intToNatF n = Init $ S $ intToNatF (n-1)
+
 n1 :: Initial NatF
-n1 = Init $ S $ Init $ S $ Init $ S $ Init $ S $ Init $ Z
+n1 = intToNatF 4
 -- [3,7,1,6]
+
+lstToListF :: [a] -> Initial (ListF a)
+lstToListF [] = Init Nil
+lstToListF (x : xs) = Init $ Cons x $ lstToListF xs
+
 l1 :: Initial (ListF Int)
-l1 = Init $ Cons 3 $ Init $ Cons 7 $ Init $ Cons 1 $ Init $ Cons 6 $ Init Nil
+l1 = lstToListF [3,7,1,6]
+-- Init $ Cons 3 $ Init $ Cons 7 $ Init $ Cons 1 $ Init $ Cons 6 $ Init Nil
 
 -- A binary search tree (maintaining the search tree invariant) that stores the values 7,2,45, and 11, as an (Initial TreeF)
+
+-- ugly but works
+insert :: Int -> Initial TreeF -> Initial TreeF
+insert i (Init TipF) = Init (ForkF (Init TipF) i (Init TipF))
+insert i (Init (ForkF l j r)) = if i <= j 
+                                 then Init (ForkF (insert i l) j r)
+                                 else Init (ForkF l j (insert i r))
+
+instance Show (Initial TreeF) where
+    show = cata (Algebra aux)
+        where aux TipF = "tip"
+              aux (ForkF l i r) = l ++ " " ++ (show i) ++ " " ++ r
+
 t1 :: Initial TreeF
-t1 = undefined
+t1 = insert 7 $ insert 2 $ insert 45 $ insert 11 $ (Init TipF)
 
 e1 :: Initial LangF
-e1 = undefined
+e1 = Init $ Add5F (Init $ Var5F "y") $ Init $ Sub5F (Init $ Int5F 4) $ Init $ Assign5F "x" (Init $ Int5F 8)
 
 
 -----------------------------------------------------
@@ -191,14 +215,16 @@ instance Show a => Show (Initial (ListF a)) where
       where aux Nil = "[]"
             aux (Cons a str) = (show a) ++ " : " ++ str
 
+parens s = "(" ++ s ++ ")"
+
 instance Show (Initial LangF ) where
   show = cata (Algebra aux)
-      where aux (Add5F s1 s2) = s1 ++ " + " ++ s2
-            aux (Sub5F s1 s2) = s1 ++ " - " ++ s2
-            aux (Mult5F s1 s2) = s1 ++ " * " ++ s2
+      where aux (Add5F s1 s2) = parens $ s1 ++ " + " ++ s2
+            aux (Sub5F s1 s2) = parens $ s1 ++ " - " ++ s2
+            aux (Mult5F s1 s2) = parens $ s1 ++ " * " ++ s2
             aux (Int5F i) = show i
             aux (Var5F s) = s
-            aux (Assign5F s s') = s ++ " := " ++ s'
+            aux (Assign5F s s') = parens $ s ++ " := " ++ s'
 
 add :: Initial NatF -> Initial NatF -> Initial NatF
 add = cata (Algebra aux)
@@ -231,11 +257,18 @@ q7aux :: Int -> LangF (Final LangF)
 q7aux n = Add5F (Final (Int5F n)) (Final $ q7aux $ n + 1)
 
 infExp :: Final LangF
-infExp = q7aux 1
+infExp = Final $ q7aux 1
 
 
 -------------------------------------------------------
 -- Question 8
 
 prefix:: Int -> Final LangF -> Initial LangF
-prefix n (Final x) = undefined
+prefix 0 (Final x) = Init (Int5F 0)
+prefix n (Final x) = aux x
+    where aux (Add5F e1 e2) = Init $ Add5F (prefix (n-1) e1) (prefix (n-1) e2)
+          aux (Sub5F e1 e2) = Init $ Sub5F (prefix (n-1) e1) (prefix (n-1) e2)
+          aux (Mult5F e1 e2) = Init $ Mult5F (prefix (n-1) e1) (prefix (n-1) e2)
+          aux (Int5F i) = Init (Int5F i)
+          aux (Var5F x) = Init (Var5F x)
+          aux (Assign5F x e) = Init (Assign5F x (prefix (n-1) e))
