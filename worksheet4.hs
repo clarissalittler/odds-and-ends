@@ -114,7 +114,7 @@ lbStyle = Token.LanguageDef
 (haskellTP,Token.LayFun layout) = Token.makeTokenParser lbStyle "{" ";" "}"
 
 lexemE p    = Token.lexeme haskellTP p
-arrow       = lexemE(string "->")
+arrow       = symboL "->" -- lexemE(string "->")
 larrow      = lexemE(string "<-")
 dot         = lexemE(char '.')
 parenS p    = between (symboL "(") (symboL ")") p
@@ -215,7 +215,7 @@ data Dec
 ------------------------------
 -- Parsing code here
 
-parseProg = sepBy1 parseDecl newline
+parseProg = many1 parseDecl
 
 tryChoice = choice . map try
 
@@ -260,7 +260,7 @@ pAs = do
 pWild = symboL "_" >> return Pwild
 pCon = parenS $ do
          c <- parseCon
-         ps <- many1 parsePat
+         ps <- many parsePat
          return $ Pcon c ps
 
 -- STATEMENTS
@@ -313,17 +313,19 @@ pGuarded pexp sep = fmap Guarded $ layout (guardedAux pexp sep) (return ())
  
 -- EXPRESSIONS
 
-parseExp = try (pEApp) <|> parseExp'
+parseExp = try (pEApps) <|> parseExp'
+
+pEApps = do
+  es <- layout parseExp' (return ())
+  if length es < 2
+    then fail "couldn't parse application"
+    else return $ foldl1 App es
   
 parseExp' = pEName <|> pELit <|> pEProd <|> pELam <|> pELet <|> pECase <|> pEDo <?> "couldn't parse expression"
 
 pEName = fmap Var parseName
 pELit = fmap Lit parseLit
 pEProd = fmap Prod $ parenS (sepBy1 parseExp commA)
-pEApp = do 
-  f <- parseExp'
-  a <- parseExp
-  return $ App f a
 pELam = do
   symboL "\\"
   ps <- many1 parsePat
@@ -355,7 +357,7 @@ funDecl = do
   pos <- getPosition
   f@(vpos,fname) <- parseVar
   m <- parseMatch (many1 parsePat) parseExp parseDecl (symboL "=")
-  ms <- option [] $ many $ parseMatch (funEq fname) parseExp parseDecl (symboL "=")
+  ms <- many $ parseMatch (funEq fname) parseExp parseDecl (symboL "=")
   return $ Fun pos f (m : ms)
 
 valDecl = do
@@ -439,5 +441,3 @@ test = do
    else case parse1 "repl" parseExp e of
     Right e' -> (putStrLn $ render $ ppExp e') >> test
     Left f -> (putStrLn $ show f) >> test
-  
-  
